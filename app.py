@@ -8,7 +8,7 @@ import pandas as pd
 st.set_page_config(page_title="Executive Name & Email Extractor", layout="wide")
 
 st.title("🏢 Executive Name & Email Extractor")
-st.write("Extract real names, designations, generated emails, and LinkedIn links directly into a single table.")
+st.write("Extract real names, designations, generated emails, and direct LinkedIn profile links into a single table.")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -26,9 +26,7 @@ ROLES = [
 
 def clean_title(title):
     """Parses raw search titles into clean Name and Designation."""
-    # Remove branding suffixes
     title = re.sub(r' - LinkedIn| \| LinkedIn| - Google News', '', title)
-    
     parts = re.split(r' - | – | \| ', title)
     if len(parts) >= 2:
         name = parts[0].strip()
@@ -36,7 +34,6 @@ def clean_title(title):
     else:
         name = parts[0].strip()
         designation = "Executive / Leader"
-        
     return name, designation
 
 def make_email(name, domain):
@@ -50,7 +47,7 @@ def make_email(name, domain):
     return f"contact@{domain}"
 
 def fetch_names_via_feed(company, query_term):
-    """Fetches public feeds to extract real executive names without API keys."""
+    """Fetches public feeds to extract real executive names and direct URLs."""
     results = []
     search_str = f'"{company}" {query_term} site:linkedin.com/in/'
     encoded_query = urllib.parse.quote(search_str)
@@ -72,7 +69,10 @@ def fetch_names_via_feed(company, query_term):
                 
                 if raw_title:
                     name, designation = clean_title(raw_title)
-                    results.append((name, designation, raw_link))
+                    # Generate a clean direct target LinkedIn X-Ray URL
+                    clean_name_query = urllib.parse.quote(f'site:linkedin.com/in/ "{name}" "{company}"')
+                    direct_linkedin = f"https://www.google.com/search?q={clean_name_query}&btnI=1"
+                    results.append((name, designation, direct_linkedin))
     except Exception:
         pass
 
@@ -85,7 +85,7 @@ if st.button("Extract Names & Contacts"):
         clean_company = company_name.strip()
         domain = company_domain.lower().replace("https://", "").replace("http://", "").replace("www.", "").strip() if company_domain else f"{clean_company.lower().replace(' ', '')}.com"
 
-        st.info(f"Extracting target names and emails for **{clean_company}**...")
+        st.info(f"Extracting target names and direct LinkedIn links for **{clean_company}**...")
 
         extracted_rows = []
 
@@ -100,17 +100,17 @@ if st.button("Extract Names & Contacts"):
                         "Full Name": name,
                         "Designation": designation,
                         "Estimated Email": email,
-                        "Profile Search": f"https://www.google.com/search?q={urllib.parse.quote(name + ' ' + clean_company + ' LinkedIn')}"
+                        "LinkedIn Profile": link
                     })
             else:
-                # Fallback if no specific feed items are returned
                 fallback_name = f"{category.split('/')[0].strip()} Lead"
+                linkedin_fallback = f"https://www.linkedin.com/search/results/people/?keywords={urllib.parse.quote(clean_company + ' ' + role_keywords)}"
                 extracted_rows.append({
                     "Category": category,
                     "Full Name": fallback_name,
                     "Designation": f"{category} at {clean_company}",
                     "Estimated Email": f"{category.split('/')[0].lower().replace(' ', '')}@{domain}",
-                    "Profile Search": f"https://www.google.com/search?q={urllib.parse.quote('site:linkedin.com/in/ ' + role_keywords + ' ' + clean_company)}"
+                    "LinkedIn Profile": linkedin_fallback
                 })
 
         df = pd.DataFrame(extracted_rows)
@@ -118,9 +118,9 @@ if st.button("Extract Names & Contacts"):
         st.success(f"Generated {len(df)} executive contact profile(s)!")
 
         st.dataframe(
-            df[["Full Name", "Designation", "Estimated Email", "Category", "Profile Search"]],
+            df[["Full Name", "Designation", "Estimated Email", "Category", "LinkedIn Profile"]],
             column_config={
-                "Profile Search": st.column_config.LinkColumn("Verify Profile")
+                "LinkedIn Profile": st.column_config.LinkColumn("LinkedIn Profile")
             },
             use_container_width=True,
             hide_index=True
