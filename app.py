@@ -8,7 +8,7 @@ import pandas as pd
 st.set_page_config(page_title="Executive Name & Email Extractor", layout="wide")
 
 st.title("🏢 Executive Name & Email Extractor")
-st.write("Extract real names, designations, generated emails, and direct LinkedIn profile links into a single table.")
+st.write("Extract real names, designations, emails, and direct LinkedIn profile links into a clean table.")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -46,8 +46,15 @@ def make_email(name, domain):
         return f"{parts[0]}@{domain}"
     return f"contact@{domain}"
 
+def get_direct_linkedin_url(name, company):
+    """Generates direct targeted LinkedIn profile search link for exact name match."""
+    query = f'"{name}" "{company}" site:linkedin.com/in/'
+    encoded_query = urllib.parse.quote(query)
+    # Direct Google search query targeting the explicit /in/ profile
+    return f"https://www.google.com/search?q={encoded_query}"
+
 def fetch_names_via_feed(company, query_term):
-    """Fetches public feeds to extract real executive names and direct URLs."""
+    """Fetches public feeds to extract real executive names."""
     results = []
     search_str = f'"{company}" {query_term} site:linkedin.com/in/'
     encoded_query = urllib.parse.quote(search_str)
@@ -65,13 +72,10 @@ def fetch_names_via_feed(company, query_term):
             
             for item in root.findall('.//item')[:2]:
                 raw_title = item.find('title').text if item.find('title') is not None else ""
-                raw_link = item.find('link').text if item.find('link') is not None else ""
                 
                 if raw_title:
                     name, designation = clean_title(raw_title)
-                    # Generate a clean direct target LinkedIn X-Ray URL
-                    clean_name_query = urllib.parse.quote(f'site:linkedin.com/in/ "{name}" "{company}"')
-                    direct_linkedin = f"https://www.google.com/search?q={clean_name_query}&btnI=1"
+                    direct_linkedin = get_direct_linkedin_url(name, company)
                     results.append((name, designation, direct_linkedin))
     except Exception:
         pass
@@ -120,7 +124,7 @@ if st.button("Extract Names & Contacts"):
         st.dataframe(
             df[["Full Name", "Designation", "Estimated Email", "Category", "LinkedIn Profile"]],
             column_config={
-                "LinkedIn Profile": st.column_config.LinkColumn("LinkedIn Profile")
+                "LinkedIn Profile": st.column_config.LinkColumn("LinkedIn Profile", display_text="Open LinkedIn")
             },
             use_container_width=True,
             hide_index=True
