@@ -8,13 +8,16 @@ import pandas as pd
 st.set_page_config(page_title="Executive Name & Email Extractor", layout="wide")
 
 st.title("🏢 Executive Name & Email Extractor")
-st.write("Extract real names, designations, emails, and direct LinkedIn profile links into a clean table.")
+st.write("Extract real names, designations, emails, and direct LinkedIn profile links targeted by company and country.")
 
-col1, col2 = st.columns(2)
+# User Inputs
+col1, col2, col3 = st.columns([2, 2, 1.5])
 with col1:
     company_name = st.text_input("Company Name (e.g., Spotify, Volvo, IKEA):", "")
 with col2:
     company_domain = st.text_input("Company Domain (e.g., spotify.com, volvocars.com):", "")
+with col3:
+    country_name = st.text_input("Country (e.g., Sweden, USA, UK):", "")
 
 ROLES = [
     ("CEO / Executive", '("CEO" OR "Chief Executive Officer" OR "Managing Director")'),
@@ -46,17 +49,18 @@ def make_email(name, domain):
         return f"{parts[0]}@{domain}"
     return f"contact@{domain}"
 
-def get_direct_linkedin_url(name, company):
+def get_direct_linkedin_url(name, company, country=""):
     """Generates direct targeted LinkedIn profile search link for exact name match."""
-    query = f'"{name}" "{company}" site:linkedin.com/in/'
+    location_str = f'"{country}"' if country else ""
+    query = f'"{name}" "{company}" {location_str} site:linkedin.com/in/'
     encoded_query = urllib.parse.quote(query)
-    # Direct Google search query targeting the explicit /in/ profile
     return f"https://www.google.com/search?q={encoded_query}"
 
-def fetch_names_via_feed(company, query_term):
-    """Fetches public feeds to extract real executive names."""
+def fetch_names_via_feed(company, query_term, country=""):
+    """Fetches public feeds to extract real executive names based on country criteria."""
     results = []
-    search_str = f'"{company}" {query_term} site:linkedin.com/in/'
+    location_str = f'"{country}"' if country else ""
+    search_str = f'"{company}" {query_term} {location_str} site:linkedin.com/in/'
     encoded_query = urllib.parse.quote(search_str)
     rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
 
@@ -75,7 +79,7 @@ def fetch_names_via_feed(company, query_term):
                 
                 if raw_title:
                     name, designation = clean_title(raw_title)
-                    direct_linkedin = get_direct_linkedin_url(name, company)
+                    direct_linkedin = get_direct_linkedin_url(name, company, country)
                     results.append((name, designation, direct_linkedin))
     except Exception:
         pass
@@ -87,14 +91,16 @@ if st.button("Extract Names & Contacts"):
         st.warning("Please enter a company name.")
     else:
         clean_company = company_name.strip()
+        clean_country = country_name.strip()
         domain = company_domain.lower().replace("https://", "").replace("http://", "").replace("www.", "").strip() if company_domain else f"{clean_company.lower().replace(' ', '')}.com"
 
-        st.info(f"Extracting target names and direct LinkedIn links for **{clean_company}**...")
+        target_info = f"**{clean_company}** ({clean_country})" if clean_country else f"**{clean_company}**"
+        st.info(f"Extracting target names and direct LinkedIn links for {target_info}...")
 
         extracted_rows = []
 
         for category, role_keywords in ROLES:
-            feed_results = fetch_names_via_feed(clean_company, role_keywords)
+            feed_results = fetch_names_via_feed(clean_company, role_keywords, clean_country)
             
             if feed_results:
                 for name, designation, link in feed_results:
@@ -104,16 +110,19 @@ if st.button("Extract Names & Contacts"):
                         "Full Name": name,
                         "Designation": designation,
                         "Estimated Email": email,
+                        "Country": clean_country if clean_country else "Global / Specified",
                         "LinkedIn Profile": link
                     })
             else:
                 fallback_name = f"{category.split('/')[0].strip()} Lead"
-                linkedin_fallback = f"https://www.linkedin.com/search/results/people/?keywords={urllib.parse.quote(clean_company + ' ' + role_keywords)}"
+                search_keywords = f"{clean_company} {clean_country} {role_keywords}".strip()
+                linkedin_fallback = f"https://www.linkedin.com/search/results/people/?keywords={urllib.parse.quote(search_keywords)}"
                 extracted_rows.append({
                     "Category": category,
                     "Full Name": fallback_name,
                     "Designation": f"{category} at {clean_company}",
                     "Estimated Email": f"{category.split('/')[0].lower().replace(' ', '')}@{domain}",
+                    "Country": clean_country if clean_country else "Global / Specified",
                     "LinkedIn Profile": linkedin_fallback
                 })
 
@@ -122,7 +131,7 @@ if st.button("Extract Names & Contacts"):
         st.success(f"Generated {len(df)} executive contact profile(s)!")
 
         st.dataframe(
-            df[["Full Name", "Designation", "Estimated Email", "Category", "LinkedIn Profile"]],
+            df[["Full Name", "Designation", "Estimated Email", "Country", "Category", "LinkedIn Profile"]],
             column_config={
                 "LinkedIn Profile": st.column_config.LinkColumn("LinkedIn Profile", display_text="Open LinkedIn")
             },
