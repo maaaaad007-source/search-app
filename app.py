@@ -1,132 +1,80 @@
 import streamlit as st
-import requests
-import re
+import urllib.parse
 import pandas as pd
 
-st.set_page_config(page_title="Executive Contact Extractor", layout="wide")
+st.set_page_config(page_title="Executive Sourcing Portal", layout="wide")
 
-st.title("🏢 Executive Contact Extractor")
-st.write("Extract names, exact designations, emails, and LinkedIn links into a structured table.")
-
-# API Credentials
-google_api_key = st.text_input("Google API Key:", type="password")
-search_engine_id = st.text_input("Google Search Engine ID (CX):")
+st.title("⚡ Executive Sourcing Portal")
+st.write("Fast-track your executive sourcing across target companies.")
 
 # Inputs
 col1, col2 = st.columns(2)
 with col1:
-    company_name = st.text_input("Company Name (e.g., Spotify, Volvo, IKEA):")
+    company_name = st.text_input("Company Name (e.g., Spotify, Volvo, IKEA):", "")
 with col2:
-    company_domain = st.text_input("Company Domain (e.g., spotify.com, volvocars.com, ikea.com):")
+    company_domain = st.text_input("Company Domain (e.g., spotify.com, volvocars.com):", "")
 
+# Key Sourcing Targets
 ROLES = [
-    ("CEO / Executive", '("CEO" OR "Chief Executive Officer" OR "Managing Director")'),
-    ("Design Director", '("Design Director" OR "Head of Design" OR "VP of Design")'),
-    ("UX Director", '("UX Director" OR "Head of UX" OR "Director of UX")'),
+    ("CEO / Managing Director", '("CEO" OR "Chief Executive Officer" OR "Managing Director")'),
+    ("Design Director / VP", '("Design Director" OR "Head of Design" OR "VP of Design")'),
+    ("UX Director / VP", '("UX Director" OR "Head of UX" OR "Director of UX")'),
     ("Product Design Director", '("Product Design Director" OR "Head of Product Design")'),
-    ("Head of HR / People", '("Head of HR" OR "Chief People Officer" OR "VP of HR")')
+    ("Head of HR / Chief People Officer", '("Head of HR" OR "Chief People Officer" OR "VP HR")')
 ]
 
-def parse_linkedin_title(raw_title):
-    """Splits LinkedIn title format: 'John Doe - Chief Executive Officer - Spotify | LinkedIn'"""
-    cleaned = raw_title.replace(" | LinkedIn", "").replace(" - LinkedIn", "").strip()
-    
-    # Common LinkedIn separator patterns
-    parts = re.split(r' - | – | \| ', cleaned)
-    
-    if len(parts) >= 2:
-        name = parts[0].strip()
-        designation = parts[1].strip()
-    elif len(parts) == 1:
-        name = parts[0].strip()
-        designation = "Executive"
+if st.button("Generate Executive Contacts & Links"):
+    if not company_name:
+        st.warning("Please enter a company name.")
     else:
-        name = "Unknown"
-        designation = "Unknown"
-        
-    return name, designation
-
-def generate_email_pattern(name, domain):
-    """Generates standard corporate email address (first.last@domain.com) from name."""
-    clean_name = re.sub(r'[^a-zA-Z\s]', '', name).strip().lower()
-    name_parts = clean_name.split()
-    
-    if len(name_parts) >= 2:
-        first = name_parts[0]
-        last = name_parts[-1]
-        return f"{first}.{last}@{domain}"
-    elif len(name_parts) == 1:
-        return f"{name_parts[0]}@{domain}"
-    return f"info@{domain}"
-
-if st.button("Extract Executive Contacts"):
-    if not google_api_key or not search_engine_id:
-        st.warning("Please enter your Google API Key and Search Engine ID.")
-    elif not company_name or not company_domain:
-        st.warning("Please enter both Company Name and Domain.")
-    else:
-        domain = company_domain.lower().replace("https://", "").replace("http://", "").replace("www.", "").strip()
         clean_company = company_name.strip()
+        domain = company_domain.lower().replace("https://", "").replace("http://", "").replace("www.", "").strip() if company_domain else f"{clean_company.lower().replace(' ', '')}.com"
 
-        st.info(f"Extracting executive contacts for **{clean_company}**...")
+        st.subheader(f"1. Key Decision-Makers for **{clean_company}**")
 
-        extracted_data = []
+        results = []
+        for role_title, keywords in ROLES:
+            # Google X-Ray Search Link
+            google_q = f'site:linkedin.com/in/ {keywords} AND "{clean_company}"'
+            google_url = f"https://www.google.com/search?q={urllib.parse.quote(google_q)}"
 
-        for category, role_query in ROLES:
-            query = f'site:linkedin.com/in/ "{clean_company}" {role_query}'
-            url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={google_api_key.strip()}&cx={search_engine_id.strip()}"
+            # LinkedIn Direct Link
+            linkedin_q = f'{keywords} AND "{clean_company}"'
+            linkedin_url = f"https://www.linkedin.com/search/results/people/?keywords={urllib.parse.quote(linkedin_q)}"
 
-            try:
-                res = requests.get(url, timeout=10)
-                if res.status_code == 200:
-                    data = res.json()
-                    items = data.get("items", [])
+            # Public Email Search Link
+            email_q = f'"{clean_company}" {keywords} "@{domain}"'
+            email_url = f"https://www.google.com/search?q={urllib.parse.quote(email_q)}"
 
-                    for item in items:
-                        raw_title = item.get("title", "")
-                        snippet = item.get("snippet", "")
-                        link = item.get("link", "")
+            results.append({
+                "Target Role": role_title,
+                "LinkedIn Direct Search": linkedin_url,
+                "Google Profile X-Ray": google_url,
+                "Extract Web Emails": email_url
+            })
 
-                        # Parse name and job designation
-                        name, designation = parse_linkedin_title(raw_title)
+        df = pd.DataFrame(results)
 
-                        # Look for raw emails in web snippet
-                        email_pattern = rf'[a-zA-Z0-9._%+-]+@{re.escape(domain)}'
-                        emails_found = re.findall(email_pattern, snippet, re.IGNORECASE)
+        st.dataframe(
+            df,
+            column_config={
+                "LinkedIn Direct Search": st.column_config.LinkColumn("Open LinkedIn"),
+                "Google Profile X-Ray": st.column_config.LinkColumn("Open Google Profiles"),
+                "Extract Web Emails": st.column_config.LinkColumn("Search Indexed Emails")
+            },
+            use_container_width=True,
+            hide_index=True
+        )
 
-                        if emails_found:
-                            email = emails_found[0].lower()
-                            email_status = "Verified Public"
-                        else:
-                            email = generate_email_pattern(name, domain)
-                            email_status = "Pattern Match"
+        st.markdown("---")
+        st.subheader(f"2. Email Formula Builder (`@{domain}`)")
+        st.write("Once you tap a profile link above and grab an executive's name, use these exact patterns:")
 
-                        extracted_data.append({
-                            "Category": category,
-                            "Full Name": name,
-                            "Designation": designation,
-                            "Email Address": email,
-                            "Email Type": email_status,
-                            "LinkedIn Profile": link
-                        })
-                else:
-                    st.error(f"API Error {res.status_code}: {res.text}")
-                    break
-            except Exception as e:
-                st.error(f"Error fetching data: {e}")
+        patterns = [
+            {"Pattern": "First . Last", "Example Email": f"first.last@{domain}"},
+            {"Pattern": "First Initial + Last", "Example Email": f"f.last@{domain} or flast@{domain}"},
+            {"Pattern": "First Name Only", "Example Email": f"first@{domain}"},
+            {"Pattern": "First + Last Initial", "Example Email": f"firstl@{domain}"}
+        ]
 
-        if extracted_data:
-            st.success(f"Successfully extracted {len(extracted_data)} executive record(s)!")
-            df = pd.DataFrame(extracted_data)
-
-            # Display clean result table
-            st.dataframe(
-                df[["Full Name", "Designation", "Email Address", "Email Type", "Category", "LinkedIn Profile"]],
-                column_config={
-                    "LinkedIn Profile": st.column_config.LinkColumn("LinkedIn")
-                },
-                use_container_width=True,
-                hide_index=True
-            )
-        else:
-            st.warning("No profiles retrieved. Double check your Search Engine ID and API Key.")
+        st.table(pd.DataFrame(patterns))
