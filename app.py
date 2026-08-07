@@ -1,64 +1,99 @@
 import streamlit as st
-import urllib.request
+import requests
 import urllib.parse
-import json
 import re
 import pandas as pd
 
 st.set_page_config(page_title="Executive Contact Finder", layout="wide")
 
 st.title("🏢 Executive Contact Finder")
-st.write("Extract verified executive names, exact designations, emails, and direct profile links.")
+st.write("Extract real executive names, exact designations, emails, and direct LinkedIn profile links.")
 
 col1, col2, col3 = st.columns([2, 2, 1.5])
 with col1:
-    company_name = st.text_input("Company Name (e.g., Spotify, Volvo, IKEA):", "")
+    company_name = st.text_input("Company Name (e.g., IKEA, Spotify, Volvo):", "")
 with col2:
-    company_domain = st.text_input("Company Domain (e.g., spotify.com, volvocars.com):", "")
+    company_domain = st.text_input("Company Domain (e.g., ikea.com, spotify.com):", "")
 with col3:
     country_name = st.text_input("Country (e.g., Sweden, UK, USA):", "")
 
 ROLES = [
-    ("CEO / Executive", ["CEO", "Chief Executive Officer", "Managing Director", "President", "Founder"]),
-    ("Design Director", ["Design Director", "Head of Design", "VP of Design", "Vice President Design"]),
-    ("UX Director", ["UX Director", "Head of UX", "Director of User Experience", "VP UX"]),
-    ("Product Design Director", ["Product Design Director", "Head of Product Design", "VP Product Design"]),
-    ("Head of HR / People", ["Chief People Officer", "Head of HR", "VP HR", "VP People", "HR Director"])
+    ("CEO / Executive", ["CEO", "Chief Executive Officer", "Managing Director", "President"]),
+    ("Design Director", ["Design Director", "Head of Design", "VP of Design"]),
+    ("UX Director", ["UX Director", "Head of UX", "Director of User Experience"]),
+    ("Product Design Director", ["Product Design Director", "Head of Product Design"]),
+    ("Head of HR / People", ["Chief People Officer", "Head of HR", "VP HR", "HR Director"])
 ]
 
-def make_email(name, domain):
-    """Generates standard corporate email address from name."""
+def parse_linkedin_title(raw_title, default_role, company):
+    """Parses titles like 'Jesper Brodin - Chief Executive Officer - IKEA | LinkedIn' into real names and exact job titles."""
+    # Strip common site footers
+    cleaned = re.sub(r'\s*[\|-]\s*LinkedIn.*$', '', raw_title, flags=re.IGNORECASE).strip()
+    
+    # Split by standard separators
+    parts = re.split(r'\s*[-–|]\s*', cleaned)
+    
+    if len(parts) >= 2:
+        name = parts[0].strip()
+        designation = " - ".join(parts[1:]).strip()
+    elif len(parts) == 1 and parts[0]:
+        name = parts[0].strip()
+        designation = f"{default_role} at {company}"
+    else:
+        name = "Unknown"
+        designation = default_role
+        
+    return name, designation
+
+def generate_email(name, domain):
+    """Formats a full name into standard corporate first.last@domain.com pattern."""
     clean_name = re.sub(r'[^a-zA-Z\s]', '', name).strip().lower()
     parts = clean_name.split()
     if len(parts) >= 2:
         return f"{parts[0]}.{parts[-1]}@{domain}"
     elif len(parts) == 1 and parts[0]:
         return f"{parts[0]}@{domain}"
-    return f"contact@{domain}"
+    return f"info@{domain}"
 
-def fetch_wiki_leadership(company):
-    """Queries Wikipedia API for verified top executives and key people."""
-    executives = []
-    try:
-        url = f"https://en.wikipedia.org/w/api.php?action=query&prop=revisions&rvprop=content&format=json&titles={urllib.parse.quote(company)}"
-        req = urllib.request.Request(url, headers={'User-Agent': 'ExecutiveFinderApp/1.0'})
-        with urllib.request.urlopen(req, timeout=5) as res:
-            data = json.loads(res.read().decode('utf-8'))
-            pages = data.get('query', {}).get('pages', {})
-            for page_id, page_data in pages.items():
-                content = page_data.get('revisions', [{}])[0].get('*', '')
+def search_real_person(company, role_list, country=""):
+    """Queries live search indexes for real person profiles matching company, role, and country."""
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    
+    for kw in role_list:
+        query_str = f'site:linkedin.com/in/ "{company}" "{kw}" {country}'.strip()
+        
+        # Query DuckDuckGo JSON Lite API
+        api_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(query_str)}"
+        
+        try:
+            res = requests.get(api_url, headers=headers, timeout=6)
+            if res.status_code == 200:
+                # Extract profile URLs and titles from html response
+                matches = re.findall(r'<a class="result__url" href="([^"]+)".*?><a class="result__title"[^>]*>(.*?)</a>', res.text, re.DOTALL)
                 
-                # Regex match key_people from Wikipedia Infobox
-                key_people = re.findall(r'key_people\s*=\s*(.*?)\n\|', content, re.DOTALL)
-                if key_people:
-                    # Clean wiki markup [[Name]] or [[Name|Title]]
-                    raw_names = re.findall(r'\[\[(?:[^\]|]*\|)?([^\]]+)\]\]', key_people[0])
-                    for n in raw_names:
-                        if not any(x in n.lower() for x in ['file', 'image', 'svg', 'jpg', 'png', 'http']):
-                            executives.append(n.strip())
-    except Exception:
-        pass
-    return list(dict.fromkeys(executives))
+                if not matches:
+                    # Alternative regex for result parsing
+                    titles = re.findall(r'class="result__title"[^>]*>(.*?)</a>', res.text, re.DOTALL)
+                    links = re.findall(r'uddg=([^&"]+)', res.text)
+                    if titles and links:
+                        matches = list(zip(links, titles))
+
+                for link, raw_title in matches:
+                    clean_link = urllib.parse.unquote(link.replace('/l/?uddg=', ''))
+                    clean_raw_title = re.sub(r'<[^>]+>', '', raw_title).strip()
+                    
+                    if 'linkedin.com/in/' in clean_link and clean_raw_title:
+                        name, designation = parse_linkedin_title(clean_raw_title, kw, company)
+                        
+                        # Validate that name is a real person name (minimum two words, not generic site text)
+                        if len(name.split()) >= 2 and not any(x in name.lower() for x in ['linkedin', 'profile', 'jobs', 'directory', 'top']):
+                            return name, designation, clean_link
+        except Exception:
+            pass
+
+    return None, None, None
 
 if st.button("Extract Real Executive Contacts"):
     if not company_name:
@@ -69,44 +104,39 @@ if st.button("Extract Real Executive Contacts"):
         domain = company_domain.lower().replace("https://", "").replace("http://", "").replace("www.", "").strip() if company_domain else f"{clean_company.lower().replace(' ', '')}.com"
 
         target_info = f"**{clean_company}** ({clean_country})" if clean_country else f"**{clean_company}**"
-        st.info(f"Retrieving verified profiles for {target_info}...")
+        st.info(f"Extracting real person names and profiles for {target_info}...")
 
-        wiki_execs = fetch_wiki_leadership(clean_company)
-        extracted_rows = []
+        extracted_data = []
 
-        for category, keywords in ROLES:
-            primary_kw = keywords[0]
+        for category, role_keywords in ROLES:
+            name, designation, profile_url = search_real_person(clean_company, role_keywords, clean_country)
             
-            # Use Wikipedia verified names for top executives if available
-            if category == "CEO / Executive" and wiki_execs:
-                for exec_name in wiki_execs[:2]:
-                    email = make_email(exec_name, domain)
-                    linkedin_url = f"https://www.linkedin.com/search/results/people/?keywords={urllib.parse.quote(f'{exec_name} {clean_company}')}"
-                    extracted_rows.append({
-                        "Full Name": exec_name,
-                        "Designation": f"Chief Executive / Key Officer at {clean_company}",
-                        "Estimated Email": email,
-                        "Country": clean_country if clean_country else "Global",
-                        "Category": category,
-                        "LinkedIn Profile": linkedin_url
-                    })
-            else:
-                # Direct X-Ray target URL to open person directly on LinkedIn
-                search_query = f'"{clean_company}" "{primary_kw}" {clean_country}'.strip()
-                linkedin_target_url = f"https://www.linkedin.com/search/results/people/?keywords={urllib.parse.quote(search_query)}"
-                
-                extracted_rows.append({
-                    "Full Name": f"Target: {primary_kw}",
-                    "Designation": f"{primary_kw} at {clean_company}",
-                    "Estimated Email": f"{primary_kw.lower().replace(' ', '')}@{domain}",
+            if name and profile_url:
+                email = generate_email(name, domain)
+                extracted_data.append({
+                    "Full Name": name,
+                    "Designation": designation,
+                    "Estimated Email": email,
                     "Country": clean_country if clean_country else "Global",
                     "Category": category,
-                    "LinkedIn Profile": linkedin_target_url
+                    "LinkedIn Profile": profile_url
+                })
+            else:
+                # Direct fallback query URL to manually view matching profiles
+                fallback_query = f'"{clean_company}" "{role_keywords[0]}" {clean_country} site:linkedin.com/in/'
+                fallback_url = f"https://www.google.com/search?q={urllib.parse.quote(fallback_query)}"
+                extracted_data.append({
+                    "Full Name": f"Search: {role_keywords[0]}",
+                    "Designation": f"{role_keywords[0]} at {clean_company}",
+                    "Estimated Email": f"{role_keywords[0].lower().replace(' ', '')}@{domain}",
+                    "Country": clean_country if clean_country else "Global",
+                    "Category": category,
+                    "LinkedIn Profile": fallback_url
                 })
 
-        df = pd.DataFrame(extracted_rows)
+        df = pd.DataFrame(extracted_data)
 
-        st.success(f"Retrieved executive profile data!")
+        st.success("Executive extraction completed!")
 
         st.dataframe(
             df[["Full Name", "Designation", "Estimated Email", "Country", "Category", "LinkedIn Profile"]],
