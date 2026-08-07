@@ -1,108 +1,132 @@
 import streamlit as st
 import requests
 import re
-from bs4 import BeautifulSoup
-import urllib.parse
 import pandas as pd
 
-st.set_page_config(page_title="Free Unlimited Executive Sourcing", layout="wide")
+st.set_page_config(page_title="Executive Contact Extractor", layout="wide")
 
-st.title("🏢 Automated Executive & Email Scraper (100% Free & Unlimited)")
-st.write("Extract public email addresses and generate decision-maker search links using web scraping.")
+st.title("🏢 Executive Contact Extractor")
+st.write("Extract names, exact designations, emails, and LinkedIn links into a structured table.")
 
-company_name = st.text_input("Company Name (e.g., Spotify, Volvo, IKEA):", "")
-company_domain = st.text_input("Company Domain (e.g., spotify.com, volvocars.com, ikea.com):", "")
+# API Credentials
+google_api_key = st.text_input("Google API Key:", type="password")
+search_engine_id = st.text_input("Google Search Engine ID (CX):")
 
-def scrape_public_emails(domain):
-    """Scrapes public search results to extract indexed emails ending with @domain."""
-    found_emails = set()
-    headers = {
-        "User-Agent": "Mozilla/5.0 (iPad; CPU OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"
-    }
+# Inputs
+col1, col2 = st.columns(2)
+with col1:
+    company_name = st.text_input("Company Name (e.g., Spotify, Volvo, IKEA):")
+with col2:
+    company_domain = st.text_input("Company Domain (e.g., spotify.com, volvocars.com, ikea.com):")
 
-    # Search queries aimed at uncovering public emails
-    queries = [
-        f'"{domain}" contact email',
-        f'"{domain}" executive email "@ {domain}"',
-        f'site:linkedin.com/in/ "{domain}" email'
-    ]
+ROLES = [
+    ("CEO / Executive", '("CEO" OR "Chief Executive Officer" OR "Managing Director")'),
+    ("Design Director", '("Design Director" OR "Head of Design" OR "VP of Design")'),
+    ("UX Director", '("UX Director" OR "Head of UX" OR "Director of UX")'),
+    ("Product Design Director", '("Product Design Director" OR "Head of Product Design")'),
+    ("Head of HR / People", '("Head of HR" OR "Chief People Officer" OR "VP of HR")')
+]
 
-    for q in queries:
-        try:
-            url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(q)}"
-            resp = requests.get(url, headers=headers, timeout=5)
-            if resp.status_code == 200:
-                soup = BeautifulSoup(resp.text, 'html.parser')
-                text = soup.get_text()
-
-                # Regex pattern matching any email belonging to the domain
-                pattern = rf'[a-zA-Z0-9._%+-]+@{re.escape(domain)}'
-                matches = re.findall(pattern, text, re.IGNORECASE)
-                for m in matches:
-                    found_emails.add(m.lower())
-        except Exception:
-            pass
-
-    return list(found_emails)
-
-if st.button("Run Scraper & Search"):
-    if not company_name or not company_domain:
-        st.warning("Please enter both the company name and domain.")
+def parse_linkedin_title(raw_title):
+    """Splits LinkedIn title format: 'John Doe - Chief Executive Officer - Spotify | LinkedIn'"""
+    cleaned = raw_title.replace(" | LinkedIn", "").replace(" - LinkedIn", "").strip()
+    
+    # Common LinkedIn separator patterns
+    parts = re.split(r' - | – | \| ', cleaned)
+    
+    if len(parts) >= 2:
+        name = parts[0].strip()
+        designation = parts[1].strip()
+    elif len(parts) == 1:
+        name = parts[0].strip()
+        designation = "Executive"
     else:
-        clean_company = company_name.strip()
+        name = "Unknown"
+        designation = "Unknown"
+        
+    return name, designation
+
+def generate_email_pattern(name, domain):
+    """Generates standard corporate email address (first.last@domain.com) from name."""
+    clean_name = re.sub(r'[^a-zA-Z\s]', '', name).strip().lower()
+    name_parts = clean_name.split()
+    
+    if len(name_parts) >= 2:
+        first = name_parts[0]
+        last = name_parts[-1]
+        return f"{first}.{last}@{domain}"
+    elif len(name_parts) == 1:
+        return f"{name_parts[0]}@{domain}"
+    return f"info@{domain}"
+
+if st.button("Extract Executive Contacts"):
+    if not google_api_key or not search_engine_id:
+        st.warning("Please enter your Google API Key and Search Engine ID.")
+    elif not company_name or not company_domain:
+        st.warning("Please enter both Company Name and Domain.")
+    else:
         domain = company_domain.lower().replace("https://", "").replace("http://", "").replace("www.", "").strip()
+        clean_company = company_name.strip()
 
-        st.markdown("---")
-        st.subheader(f"1. Automatically Scraped Emails for `@{domain}`")
-        
-        with st.spinner("Scraping public search indexes for live emails..."):
-            scraped_emails = scrape_public_emails(domain)
+        st.info(f"Extracting executive contacts for **{clean_company}**...")
 
-        if scraped_emails:
-            st.success(f"Found {len(scraped_emails)} publicly indexed email address(es)!")
-            email_df = pd.DataFrame({"Public Email Address": scraped_emails})
-            st.table(email_df)
+        extracted_data = []
+
+        for category, role_query in ROLES:
+            query = f'site:linkedin.com/in/ "{clean_company}" {role_query}'
+            url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={google_api_key.strip()}&cx={search_engine_id.strip()}"
+
+            try:
+                res = requests.get(url, timeout=10)
+                if res.status_code == 200:
+                    data = res.json()
+                    items = data.get("items", [])
+
+                    for item in items:
+                        raw_title = item.get("title", "")
+                        snippet = item.get("snippet", "")
+                        link = item.get("link", "")
+
+                        # Parse name and job designation
+                        name, designation = parse_linkedin_title(raw_title)
+
+                        # Look for raw emails in web snippet
+                        email_pattern = rf'[a-zA-Z0-9._%+-]+@{re.escape(domain)}'
+                        emails_found = re.findall(email_pattern, snippet, re.IGNORECASE)
+
+                        if emails_found:
+                            email = emails_found[0].lower()
+                            email_status = "Verified Public"
+                        else:
+                            email = generate_email_pattern(name, domain)
+                            email_status = "Pattern Match"
+
+                        extracted_data.append({
+                            "Category": category,
+                            "Full Name": name,
+                            "Designation": designation,
+                            "Email Address": email,
+                            "Email Type": email_status,
+                            "LinkedIn Profile": link
+                        })
+                else:
+                    st.error(f"API Error {res.status_code}: {res.text}")
+                    break
+            except Exception as e:
+                st.error(f"Error fetching data: {e}")
+
+        if extracted_data:
+            st.success(f"Successfully extracted {len(extracted_data)} executive record(s)!")
+            df = pd.DataFrame(extracted_data)
+
+            # Display clean result table
+            st.dataframe(
+                df[["Full Name", "Designation", "Email Address", "Email Type", "Category", "LinkedIn Profile"]],
+                column_config={
+                    "LinkedIn Profile": st.column_config.LinkColumn("LinkedIn")
+                },
+                use_container_width=True,
+                hide_index=True
+            )
         else:
-            st.info("No raw email addresses were directly exposed in public snippets. Use the target search links below to identify executive names.")
-
-        st.markdown("---")
-        st.subheader("2. Targeted Decision-Maker Links")
-
-        roles = [
-            ("CEO / Managing Director", '("CEO" OR "Chief Executive Officer" OR "Managing Director")'),
-            ("Design Director", '("Design Director" OR "Head of Design" OR "VP of Design")'),
-            ("UX Director", '("UX Director" OR "Head of UX" OR "Director of UX")'),
-            ("Product Design Director", '("Product Design Director" OR "Head of Product Design")'),
-            ("Head of HR / People", '("Head of HR" OR "Chief People Officer" OR "VP HR")')
-        ]
-
-        search_data = []
-        for role_name, keywords in roles:
-            google_query = f'site:linkedin.com/in/ {keywords} AND "{clean_company}"'
-            linkedin_query = f'{keywords} AND "{clean_company}"'
-            
-            search_data.append({
-                "Target Role": role_name,
-                "Google X-Ray Link": f"https://www.google.com/search?q={urllib.parse.quote(google_query)}",
-                "LinkedIn Link": f"https://www.linkedin.com/search/results/people/?keywords={urllib.parse.quote(linkedin_query)}"
-            })
-
-        st.dataframe(
-            pd.DataFrame(search_data),
-            column_config={
-                "Google X-Ray Link": st.column_config.LinkColumn("Google Profile Search"),
-                "LinkedIn Link": st.column_config.LinkColumn("LinkedIn Search")
-            },
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.markdown("---")
-        st.subheader("3. Recommended Email Formula")
-        st.write(f"Once you find an executive's name on LinkedIn, apply these common pattern formats for `@{domain}`:")
-        
-        st.table(pd.DataFrame([
-            {"Pattern": "First . Last", "Example": f"first.last@{domain}"},
-            {"Pattern": "First Initial + Last", "Example": f"f.last@{domain} or flast@{domain}"},
-            {"Pattern": "First Name Only", "Example": f"first@{domain}"}
-        ]))
+            st.warning("No profiles retrieved. Double check your Search Engine ID and API Key.")
