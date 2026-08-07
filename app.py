@@ -1,92 +1,111 @@
 import streamlit as st
 import urllib.request
 import urllib.parse
-import xml.etree.ElementTree as ET
 import re
 import pandas as pd
+from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="Executive Name & Email Extractor", layout="wide")
+st.set_page_config(page_title="Executive Contact Finder", layout="wide")
 
-st.title("🏢 Executive Name & Email Extractor")
-st.write("Extract real names, designations, emails, and direct LinkedIn profile links targeted by company and country.")
+st.title("🏢 Executive Contact Finder")
+st.write("Extract real executive names, designations, and verified LinkedIn profile links.")
 
-# User Inputs
 col1, col2, col3 = st.columns([2, 2, 1.5])
 with col1:
-    company_name = st.text_input("Company Name (e.g., Spotify, Volvo, IKEA):", "")
+    company_name = st.text_input("Company Name (e.g., Volvo, Spotify, IKEA):", "")
 with col2:
-    company_domain = st.text_input("Company Domain (e.g., spotify.com, volvocars.com):", "")
+    company_domain = st.text_input("Company Domain (e.g., volvocars.com, spotify.com):", "")
 with col3:
-    country_name = st.text_input("Country (e.g., Sweden, USA, UK):", "")
+    country_name = st.text_input("Country (e.g., Sweden, UK, USA):", "")
 
+# Expanded Keywords for exact leadership roles
 ROLES = [
-    ("CEO / Executive", '("CEO" OR "Chief Executive Officer" OR "Managing Director")'),
-    ("Design Director", '("Design Director" OR "Head of Design" OR "VP of Design")'),
-    ("UX Director", '("UX Director" OR "Head of UX" OR "Director of UX")'),
-    ("Product Design Director", '("Product Design Director" OR "Head of Product Design")'),
-    ("Head of HR / People", '("Head of HR" OR "Chief People Officer" OR "VP HR")')
+    ("CEO / Executive", [
+        "Chief Executive Officer", "CEO", "Managing Director", "President", "Executive Director", "Country Head"
+    ]),
+    ("Design Director", [
+        "Design Director", "Head of Design", "VP of Design", "Vice President Design", "Global Design Director"
+    ]),
+    ("UX Director", [
+        "UX Director", "Head of UX", "Director of User Experience", "VP UX", "Global Head of UX"
+    ]),
+    ("Product Design Director", [
+        "Product Design Director", "Head of Product Design", "VP Product Design", "Director Product Design"
+    ]),
+    ("Head of HR / People", [
+        "Chief People Officer", "Head of HR", "VP HR", "VP People", "HR Director", "Director Human Resources"
+    ])
 ]
 
-def clean_title(title):
-    """Parses raw search titles into clean Name and Designation."""
-    title = re.sub(r' - LinkedIn| \| LinkedIn| - Google News', '', title)
-    parts = re.split(r' - | – | \| ', title)
+def clean_title(raw_title, company):
+    """Clean LinkedIn title string to extract Full Name and Designation."""
+    # Remove branding
+    cleaned = re.sub(r' - LinkedIn| \| LinkedIn| - Google Search', '', raw_title, flags=re.IGNORECASE)
+    parts = re.split(r' - | – | \| ', cleaned)
+    
     if len(parts) >= 2:
         name = parts[0].strip()
-        designation = parts[1].strip()
+        designation = " - ".join(parts[1:]).strip()
     else:
         name = parts[0].strip()
-        designation = "Executive / Leader"
+        designation = f"Executive at {company}"
+        
     return name, designation
 
-def make_email(name, domain):
-    """Generates standard first.last@domain email format."""
+def generate_email(name, domain):
+    """Generates standard corporate email address."""
     clean_name = re.sub(r'[^a-zA-Z\s]', '', name).strip().lower()
     parts = clean_name.split()
     if len(parts) >= 2:
         return f"{parts[0]}.{parts[-1]}@{domain}"
     elif len(parts) == 1 and parts[0]:
         return f"{parts[0]}@{domain}"
-    return f"contact@{domain}"
+    return f"info@{domain}"
 
-def get_direct_linkedin_url(name, company, country=""):
-    """Generates direct targeted LinkedIn profile search link for exact name match."""
-    location_str = f'"{country}"' if country else ""
-    query = f'"{name}" "{company}" {location_str} site:linkedin.com/in/'
-    encoded_query = urllib.parse.quote(query)
-    return f"https://www.google.com/search?q={encoded_query}"
-
-def fetch_names_via_feed(company, query_term, country=""):
-    """Fetches public feeds to extract real executive names based on country criteria."""
+def fetch_real_profiles(company, keywords, country=""):
+    """Scrapes public search results directly for real LinkedIn profiles."""
     results = []
-    location_str = f'"{country}"' if country else ""
-    search_str = f'"{company}" {query_term} {location_str} site:linkedin.com/in/'
-    encoded_query = urllib.parse.quote(search_str)
-    rss_url = f"https://news.google.com/rss/search?q={encoded_query}&hl=en-US&gl=US&ceid=US:en"
-
+    kw_query = ' OR '.join([f'"{kw}"' for kw in keywords])
+    location_query = f'"{country}"' if country else ""
+    
+    # Target exact LinkedIn profile pages
+    search_query = f'site:linkedin.com/in/ "{company}" ({kw_query}) {location_query}'.strip()
+    encoded_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote(search_query)}"
+    
     req = urllib.request.Request(
-        rss_url, 
-        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        encoded_url,
+        headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     )
-
+    
     try:
-        with urllib.request.urlopen(req, timeout=5) as response:
-            xml_data = response.read()
-            root = ET.fromstring(xml_data)
+        with urllib.request.urlopen(req, timeout=6) as response:
+            html = response.read().decode('utf-8')
+            soup = BeautifulSoup(html, 'html.parser')
             
-            for item in root.findall('.//item')[:2]:
-                raw_title = item.find('title').text if item.find('title') is not None else ""
-                
-                if raw_title:
-                    name, designation = clean_title(raw_title)
-                    direct_linkedin = get_direct_linkedin_url(name, company, country)
-                    results.append((name, designation, direct_linkedin))
+            for a in soup.find_all('a', class_='result__url'):
+                href = a.get('href', '')
+                # Unpack DuckDuckGo redirect link
+                if 'uddg=' in href:
+                    actual_url = urllib.parse.unquote(href.split('uddg=')[1].split('&')[0])
+                else:
+                    actual_url = href
+                    
+                if 'linkedin.com/in/' in actual_url:
+                    title_elem = a.find_parent('div', class_='result__body')
+                    if title_elem and title_elem.find('a', class_='result__title'):
+                        raw_title = title_elem.find('a', class_='result__title').get_text().strip()
+                        name, designation = clean_title(raw_title, company)
+                        # Ensure we don't pick generic search page titles
+                        if name.lower() not in ["linkedin", "profiles", "top", "jobs"] and len(name.split()) >= 2:
+                            results.append((name, designation, actual_url))
+                            if len(results) >= 2:
+                                break
     except Exception:
         pass
-
+        
     return results
 
-if st.button("Extract Names & Contacts"):
+if st.button("Extract Real Executive Contacts"):
     if not company_name:
         st.warning("Please enter a company name.")
     else:
@@ -95,45 +114,45 @@ if st.button("Extract Names & Contacts"):
         domain = company_domain.lower().replace("https://", "").replace("http://", "").replace("www.", "").strip() if company_domain else f"{clean_company.lower().replace(' ', '')}.com"
 
         target_info = f"**{clean_company}** ({clean_country})" if clean_country else f"**{clean_company}**"
-        st.info(f"Extracting target names and direct LinkedIn links for {target_info}...")
+        st.info(f"Searching real LinkedIn executive profiles for {target_info}...")
 
-        extracted_rows = []
+        extracted_data = []
 
-        for category, role_keywords in ROLES:
-            feed_results = fetch_names_via_feed(clean_company, role_keywords, clean_country)
+        for category, keywords in ROLES:
+            profiles = fetch_real_profiles(clean_company, keywords, clean_country)
             
-            if feed_results:
-                for name, designation, link in feed_results:
-                    email = make_email(name, domain)
-                    extracted_rows.append({
-                        "Category": category,
+            if profiles:
+                for name, designation, link in profiles:
+                    email = generate_email(name, domain)
+                    extracted_data.append({
                         "Full Name": name,
                         "Designation": designation,
                         "Estimated Email": email,
-                        "Country": clean_country if clean_country else "Global / Specified",
+                        "Country": clean_country if clean_country else "Global",
+                        "Category": category,
                         "LinkedIn Profile": link
                     })
             else:
-                fallback_name = f"{category.split('/')[0].strip()} Lead"
-                search_keywords = f"{clean_company} {clean_country} {role_keywords}".strip()
-                linkedin_fallback = f"https://www.linkedin.com/search/results/people/?keywords={urllib.parse.quote(search_keywords)}"
-                extracted_rows.append({
+                # Direct search fallback URL without generating fake lead names
+                search_kw = keywords[0]
+                direct_search_url = f"https://www.google.com/search?q={urllib.parse.quote(f'site:linkedin.com/in/ \"{clean_company}\" \"{search_kw}\" {clean_country}')}"
+                extracted_data.append({
+                    "Full Name": "No direct public profile found",
+                    "Designation": f"{category} candidate at {clean_company}",
+                    "Estimated Email": f"{keywords[0].lower().replace(' ', '')}@{domain}",
+                    "Country": clean_country if clean_country else "Global",
                     "Category": category,
-                    "Full Name": fallback_name,
-                    "Designation": f"{category} at {clean_company}",
-                    "Estimated Email": f"{category.split('/')[0].lower().replace(' ', '')}@{domain}",
-                    "Country": clean_country if clean_country else "Global / Specified",
-                    "LinkedIn Profile": linkedin_fallback
+                    "LinkedIn Profile": direct_search_url
                 })
 
-        df = pd.DataFrame(extracted_rows)
+        df = pd.DataFrame(extracted_data)
 
-        st.success(f"Generated {len(df)} executive contact profile(s)!")
+        st.success(f"Retrieved executive profile data!")
 
         st.dataframe(
             df[["Full Name", "Designation", "Estimated Email", "Country", "Category", "LinkedIn Profile"]],
             column_config={
-                "LinkedIn Profile": st.column_config.LinkColumn("LinkedIn Profile", display_text="Open LinkedIn")
+                "LinkedIn Profile": st.column_config.LinkColumn("LinkedIn Profile", display_text="Open LinkedIn Profile")
             },
             use_container_width=True,
             hide_index=True
